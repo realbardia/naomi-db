@@ -35,6 +35,7 @@ pub struct PostDatabaseReq {
 pub struct PostDatabaseResult {
     pub text: String,
     pub english: Option<String>,
+    pub embeddings: Vec<f32>,
     pub id: String,
 }
 
@@ -95,11 +96,12 @@ impl Database {
                 let md5 = md5::compute(t.clone());
                 let id_hash: String = format!("{:x}", md5);
 
-                embeddings_list.push(embeddings.unwrap());
+                embeddings_list.push(embeddings.clone().unwrap());
                 results.push(PostDatabaseResult {
                     id: id_hash,
                     text: t,
                     english: Some(english),
+                    embeddings: embeddings.unwrap(),
                 });
             }
         } else {
@@ -115,11 +117,12 @@ impl Database {
 
                 let embeddings = Ollama::embedding(t.clone(), model.clone()).await;
 
-                embeddings_list.push(embeddings.unwrap());
+                embeddings_list.push(embeddings.clone().unwrap());
                 results.push(PostDatabaseResult {
                     id: id,
                     text: t,
                     english: None,
+                    embeddings: embeddings.unwrap(),
                 });
             }
         }
