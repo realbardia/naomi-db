@@ -23,6 +23,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/v1/health", web::get().to(health::Health::check))
 
             .route("/api/v1/database", web::post().to(database::Database::insert))
+            .route("/api/v1/database/embeddings", web::post().to(database::Database::insert_embeddings))
             .route("/api/v1/database/find", web::post().to(database::Database::find))
     })
     .workers(2)

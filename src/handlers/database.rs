@@ -39,6 +39,20 @@ pub struct PostDatabaseResult {
     pub id: String,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PostEmbeddingsReq {
+    pub id: String,
+    pub text: String,
+    pub english: Option<String>,
+    pub embeddings: Vec<f32>,
+    pub collection: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PostEmbeddingsResult {
+    pub id: String,
+}
+
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FindDatabaseReq {
@@ -152,6 +166,32 @@ impl Database {
         let _result = collection.upsert(collection_entries, None).await;
 
         HttpResponse::Ok().json(GeneralValueResult{result: results, status: true})
+	} 
+
+	pub async fn insert_embeddings(data: web::Json<PostEmbeddingsReq>) -> impl Responder {
+
+        let collection_name: String = data.collection.clone();
+        let chroma: ChromaClient = ChromaClient::new(Default::default());
+        let collection: ChromaCollection = chroma.get_or_create_collection(collection_name.as_str(), None).await.unwrap();
+
+        let mut ids: Vec<&str> = Vec::new();
+        let mut embeddings: Vec<Vec<f32>> = Vec::new();
+        let mut documents: Vec<&str> = Vec::new();
+        
+        ids.push(data.id.as_str());
+        embeddings.push(data.embeddings.clone());
+        documents.push(data.text.as_str());
+
+        let collection_entries = CollectionEntries {
+            ids: ids,
+            embeddings: Some(embeddings),
+            metadatas: None,
+            documents: Some(documents)
+        };
+         
+        let _result = collection.upsert(collection_entries, None).await;
+
+        HttpResponse::Ok().json(GeneralValueResult{result: PostEmbeddingsResult { id: data.id.clone() }, status: true})
 	} 
 
 	pub async fn find(data: web::Json<FindDatabaseReq>) -> impl Responder {
