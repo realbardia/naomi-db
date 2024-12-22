@@ -1,3 +1,4 @@
+use chromadb::v2::client::ChromaClientOptions;
 use serde::{Deserialize, Serialize};
 use crate::models::general::*;
 use crate::models::database::*;
@@ -81,6 +82,11 @@ fn translate_prompt(prompt: String, lang: String) -> String {
 
 impl Database {
 
+    pub fn get_chroma_port() -> i32 {
+        use std::env;
+        env::var("CHROMA_PORT").unwrap_or("9011".to_string()).parse().unwrap()
+    }
+
 	pub async fn insert(data: web::Json<PostDatabaseReq>) -> impl Responder {
         let model = data.model.clone().unwrap_or(DEFAULT_EMBEDDING_MODEL.to_string());
 
@@ -143,7 +149,10 @@ impl Database {
         }
 
         let collection_name: String = data.collection.clone();
-        let chroma: ChromaClient = ChromaClient::new(Default::default());
+        let mut chroma_options: ChromaClientOptions = Default::default();
+        chroma_options.url = "http://127.0.0.1:".to_string() + Database::get_chroma_port().to_string().as_str();
+
+        let chroma: ChromaClient = ChromaClient::new(chroma_options);
         let collection: ChromaCollection = chroma.get_or_create_collection(collection_name.as_str(), None).await.unwrap();
 
         let mut ids: Vec<&str> = Vec::new();
@@ -172,7 +181,10 @@ impl Database {
 	pub async fn insert_embeddings(data: web::Json<PostEmbeddingsReq>) -> impl Responder {
 
         let collection_name: String = data.collection.clone();
-        let chroma: ChromaClient = ChromaClient::new(Default::default());
+        let mut chroma_options: ChromaClientOptions = Default::default();
+        chroma_options.url = "http://127.0.0.1:".to_string() + Database::get_chroma_port().to_string().as_str();
+
+        let chroma: ChromaClient = ChromaClient::new(chroma_options);
         let collection: ChromaCollection = chroma.get_or_create_collection(collection_name.as_str(), None).await.unwrap();
 
         let mut result: Vec<String> = Vec::new();
@@ -221,7 +233,10 @@ impl Database {
         }
 
         let collection_name: String = data.collection.clone();
-        let chroma: ChromaClient = ChromaClient::new(Default::default());
+        let mut chroma_options: ChromaClientOptions = Default::default();
+        chroma_options.url = "http://127.0.0.1:".to_string() + Database::get_chroma_port().to_string().as_str();
+
+        let chroma: ChromaClient = ChromaClient::new(chroma_options);
         let collection: ChromaCollection = chroma.get_or_create_collection(collection_name.as_str(), None).await.unwrap();
 
         let query = QueryOptions {
