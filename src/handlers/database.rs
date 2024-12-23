@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chromadb::v2::client::ChromaClientOptions;
 use serde::{Deserialize, Serialize};
 use crate::models::general::*;
@@ -13,8 +15,9 @@ use chromadb::v2::collection::{ChromaCollection, CollectionEntries, QueryOptions
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PostDatabaseItem {
-    id: Option<String>,
-    text: String,
+    pub id: Option<String>,
+    pub text: String,
+    pub metadata: Option<HashMap<String, String>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -27,6 +30,7 @@ pub enum DataType {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PostDatabaseReq {
     pub data: DataType,
+    pub store_documents: Option<bool>,
     pub model: Option<String>,
     pub collection: String,
     pub translate_to: Option<String>,
@@ -35,6 +39,7 @@ pub struct PostDatabaseReq {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PostDatabaseResult {
     pub text: String,
+    pub metadata: Option<HashMap<String, String>>,
     pub english: Option<String>,
     pub embeddings: Vec<f32>,
     pub id: String,
@@ -45,6 +50,7 @@ pub struct PostDatabaseResult {
 pub struct PostEmbeddingsItem {
     pub id: String,
     pub text: String,
+    pub metadata: Option<HashMap<String, String>>,
     pub english: Option<String>,
     pub embeddings: Vec<f32>,
 }
@@ -52,6 +58,7 @@ pub struct PostEmbeddingsItem {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PostEmbeddingsReq {
     pub data: Vec<PostEmbeddingsItem>,
+    pub store_documents: Option<bool>,
     pub collection: String,
 }
 
@@ -88,6 +95,8 @@ impl Database {
     }
 
 	pub async fn insert(data: web::Json<PostDatabaseReq>) -> impl Responder {
+        use serde_json::{Map, Value};
+
         let model = data.model.clone().unwrap_or(DEFAULT_EMBEDDING_MODEL.to_string());
 
         let mut data_list: Vec<PostDatabaseItem> = Vec::new();
@@ -97,6 +106,7 @@ impl Database {
                     data_list.push(PostDatabaseItem {
                         id: None,
                         text: s.clone(),
+                        metadata: None,
                     });
                 }
             }
@@ -121,6 +131,7 @@ impl Database {
                 results.push(PostDatabaseResult {
                     id: id_hash,
                     text: t,
+                    metadata: item.metadata,
                     english: Some(english),
                     embeddings: embeddings.unwrap(),
                 });
@@ -142,6 +153,7 @@ impl Database {
                 results.push(PostDatabaseResult {
                     id: id,
                     text: t,
+                    metadata: item.metadata,
                     english: None,
                     embeddings: embeddings.unwrap(),
                 });
@@ -158,19 +170,36 @@ impl Database {
         let mut ids: Vec<&str> = Vec::new();
         let mut embeddings: Vec<Vec<f32>> = Vec::new();
         let mut documents: Vec<&str> = Vec::new();
+        let mut metadatas: Vec<Map<String, Value>> = Vec::new();
         let mut idx = 0;
         for r in &results {
+            let metadata = match r.metadata.clone() {
+                Some(map) => {Map::new(); 
+                    let mut result = Map::new();
+                    for (key, value) in map {
+                        result.insert(key, Value::String(value));
+                    }
+                    result
+                },
+                None => Map::new(),
+            };
+
             ids.push(r.id.as_str());
             embeddings.push(embeddings_list.get(idx).unwrap().clone());
             documents.push(r.text.as_str());
+            metadatas.push(metadata);
             idx = idx + 1;
         }
 
         let collection_entries = CollectionEntries {
             ids: ids,
             embeddings: Some(embeddings),
-            metadatas: None,
-            documents: Some(documents)
+            metadatas: Some(metadatas),
+            documents: if data.store_documents == Some(true) {
+                Some(documents)
+            } else {
+                None
+            },
         };
          
         let _result = collection.upsert(collection_entries, None).await;
@@ -179,6 +208,7 @@ impl Database {
 	} 
 
 	pub async fn insert_embeddings(data: web::Json<PostEmbeddingsReq>) -> impl Responder {
+        use serde_json::{Map, Value};
 
         let collection_name: String = data.collection.clone();
         let mut chroma_options: ChromaClientOptions = Default::default();
@@ -193,11 +223,24 @@ impl Database {
         let mut ids: Vec<&str> = Vec::new();
         let mut embeddings: Vec<Vec<f32>> = Vec::new();
         let mut documents: Vec<&str> = Vec::new();
+        let mut metadatas: Vec<Map<String, Value>> = Vec::new();
         
         for item in data.data.clone() {
+            let metadata = match item.metadata.clone() {
+                Some(map) => {Map::new(); 
+                    let mut result = Map::new();
+                    for (key, value) in map {
+                        result.insert(key, Value::String(value));
+                    }
+                    result
+                },
+                None => Map::new(),
+            };
+
             result.push(item.id);
             texts.push(item.text);
             embeddings.push(item.embeddings.clone());
+            metadatas.push(metadata);
         }
         for id in &result {
             ids.push(id.as_str());
@@ -209,8 +252,12 @@ impl Database {
         let collection_entries = CollectionEntries {
             ids: ids,
             embeddings: Some(embeddings),
-            metadatas: None,
-            documents: Some(documents)
+            metadatas: Some(metadatas),
+            documents: if data.store_documents == Some(true) {
+                Some(documents)
+            } else {
+                None
+            },
         };
          
         let _result = collection.upsert(collection_entries, None).await;
