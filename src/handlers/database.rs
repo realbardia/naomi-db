@@ -72,6 +72,7 @@ pub struct FindDatabaseReq {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FindDatabaseResult {
     pub id: String,
+    pub text: String,
     pub metadata: Option<Map<String, Value>>,
     pub distance: f32,
 }
@@ -163,6 +164,7 @@ impl Database {
         let collection: ChromaCollection = chroma.get_or_create_collection(collection_name.as_str(), None).await.unwrap();
 
         let mut ids: Vec<&str> = Vec::new();
+        let mut documents: Vec<&str> = Vec::new();
         let mut embeddings: Vec<Vec<f32>> = Vec::new();
         let mut metadatas: Vec<Map<String, Value>> = Vec::new();
         let mut idx = 0;
@@ -173,6 +175,7 @@ impl Database {
             };
 
             ids.push(r.id.as_str());
+            documents.push(&r.text.as_str());
             embeddings.push(embeddings_list.get(idx).unwrap().clone());
             metadatas.push(metadata);
             idx = idx + 1;
@@ -182,7 +185,7 @@ impl Database {
             ids: ids,
             embeddings: Some(embeddings),
             metadatas: Some(metadatas),
-            documents: None,
+            documents: Some(documents),
         };
          
         let _result = collection.upsert(collection_entries, None).await;
@@ -199,9 +202,11 @@ impl Database {
         let collection: ChromaCollection = chroma.get_or_create_collection(collection_name.as_str(), None).await.unwrap();
 
         let mut result: Vec<String> = Vec::new();
+        let mut documents_strs: Vec<String> = Vec::new();
 
         let mut ids: Vec<&str> = Vec::new();
         let mut embeddings: Vec<Vec<f32>> = Vec::new();
+        let mut documents: Vec<&str> = Vec::new();
         let mut metadatas: Vec<Map<String, Value>> = Vec::new();
         
         for item in data.data.clone() {
@@ -211,18 +216,22 @@ impl Database {
             };
 
             result.push(item.id);
+            documents_strs.push(item.text);
             embeddings.push(item.embeddings.clone());
             metadatas.push(metadata);
         }
         for id in &result {
             ids.push(id.as_str());
         }
+        for str in &documents_strs {
+            documents.push(str.as_str());
+        }
 
         let collection_entries = CollectionEntries {
             ids: ids,
             embeddings: Some(embeddings),
             metadatas: Some(metadatas),
-            documents: None,
+            documents: Some(documents),
         };
          
         let _result = collection.upsert(collection_entries, None).await;
@@ -257,7 +266,7 @@ impl Database {
             where_metadata: None,
             where_document: None,
             n_results: if data.limit == None { Some(10) } else { data.limit },
-            include: Some(vec!["distances".into(), "metadatas".into()])
+            include: Some(vec!["documents".into(), "distances".into(), "metadatas".into()])
         };
 
         let result = collection.query(query, None).await;
@@ -265,6 +274,7 @@ impl Database {
             Ok(r) => {
                 let ids = r.ids.get(0).unwrap();
                 let distances = r.distances.unwrap().get(0).unwrap().clone();
+                let documents = r.documents.unwrap().get(0).unwrap().clone();
                 let metadatas = r.metadatas.unwrap().get(0).unwrap().clone();
 
                 let mut list: Vec<FindDatabaseResult> = Vec::new();
@@ -273,6 +283,7 @@ impl Database {
                     list.push(FindDatabaseResult {
                         id: id.clone(),
                         metadata: metadatas.get(idx).unwrap().clone(),
+                        text: documents.get(idx).unwrap().clone(),
                         distance: distances.get(idx).unwrap().clone(),
                     });
                     idx = idx + 1;
