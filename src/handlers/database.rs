@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use chromadb::v2::client::ChromaClientOptions;
 use serde::{Deserialize, Serialize};
 use crate::models::general::*;
@@ -9,6 +7,7 @@ use actix_web::*;
 use actix_web::web;
 use md5;
 
+use serde_json::{Map, Value};
 use chromadb::v2::client::ChromaClient;
 use chromadb::v2::collection::{ChromaCollection, CollectionEntries, QueryOptions};
 
@@ -17,7 +16,7 @@ use chromadb::v2::collection::{ChromaCollection, CollectionEntries, QueryOptions
 pub struct PostDatabaseItem {
     pub id: Option<String>,
     pub text: String,
-    pub metadata: Option<HashMap<String, String>>,
+    pub metadata: Option<Map<String, Value>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -38,7 +37,7 @@ pub struct PostDatabaseReq {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PostDatabaseResult {
     pub text: String,
-    pub metadata: Option<HashMap<String, String>>,
+    pub metadata: Option<Map<String, Value>>,
     pub english: Option<String>,
     pub embeddings: Vec<f32>,
     pub id: String,
@@ -49,7 +48,7 @@ pub struct PostDatabaseResult {
 pub struct PostEmbeddingsItem {
     pub id: String,
     pub text: String,
-    pub metadata: Option<HashMap<String, String>>,
+    pub metadata: Option<Map<String, Value>>,
     pub english: Option<String>,
     pub embeddings: Vec<f32>,
 }
@@ -73,7 +72,7 @@ pub struct FindDatabaseReq {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FindDatabaseResult {
     pub id: String,
-    pub metadata: Option<HashMap<String, String>>,
+    pub metadata: Option<Map<String, Value>>,
     pub distance: f32,
 }
 
@@ -93,8 +92,6 @@ impl Database {
     }
 
 	pub async fn insert(data: web::Json<PostDatabaseReq>) -> impl Responder {
-        use serde_json::{Map, Value};
-
         let model = data.model.clone().unwrap_or(DEFAULT_EMBEDDING_MODEL.to_string());
 
         let mut data_list: Vec<PostDatabaseItem> = Vec::new();
@@ -171,13 +168,7 @@ impl Database {
         let mut idx = 0;
         for r in &results {
             let metadata = match r.metadata.clone() {
-                Some(map) => {Map::new(); 
-                    let mut result = Map::new();
-                    for (key, value) in map {
-                        result.insert(key, Value::String(value));
-                    }
-                    result
-                },
+                Some(map) => map,
                 None => Map::new(),
             };
 
@@ -200,8 +191,6 @@ impl Database {
 	} 
 
 	pub async fn insert_embeddings(data: web::Json<PostEmbeddingsReq>) -> impl Responder {
-        use serde_json::{Map, Value};
-
         let collection_name: String = data.collection.clone();
         let mut chroma_options: ChromaClientOptions = Default::default();
         chroma_options.url = "http://127.0.0.1:".to_string() + Database::get_chroma_port().to_string().as_str();
@@ -217,13 +206,7 @@ impl Database {
         
         for item in data.data.clone() {
             let metadata = match item.metadata.clone() {
-                Some(map) => {Map::new(); 
-                    let mut result = Map::new();
-                    for (key, value) in map {
-                        result.insert(key, Value::String(value));
-                    }
-                    result
-                },
+                Some(map) => map,
                 None => Map::new(),
             };
 
@@ -248,8 +231,6 @@ impl Database {
 	} 
 
 	pub async fn find(data: web::Json<FindDatabaseReq>) -> impl Responder {
-        use serde_json::{Value};
-        
         let model = data.model.clone().unwrap_or(DEFAULT_EMBEDDING_MODEL.to_string());
         
         let embedding: Vec<f32>;
@@ -289,22 +270,9 @@ impl Database {
                 let mut list: Vec<FindDatabaseResult> = Vec::new();
                 let mut idx = 0;
                 for id in ids {
-                    let metadata_hash = match metadatas.get(idx).unwrap().clone() {
-                        Some(json_map) => {
-                            let mut result = HashMap::new();
-                            for (key, value) in json_map {
-                                if let Value::String(v) = value {
-                                    result.insert(key, v);
-                                }
-                            }
-                            Some(result)
-                        },
-                        None => None,
-                    };
-
                     list.push(FindDatabaseResult {
                         id: id.clone(),
-                        metadata: metadata_hash,
+                        metadata: metadatas.get(idx).unwrap().clone(),
                         distance: distances.get(idx).unwrap().clone(),
                     });
                     idx = idx + 1;
