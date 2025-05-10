@@ -32,6 +32,7 @@ pub struct PostDatabaseReq {
     pub model: Option<String>,
     pub collection: String,
     pub translate_to: Option<String>,
+    pub calculate_nearest: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -57,6 +58,7 @@ pub struct PostEmbeddingsItem {
 pub struct PostEmbeddingsReq {
     pub data: Vec<PostEmbeddingsItem>,
     pub collection: String,
+    pub calculate_nearest: Option<bool>,
 }
 
 
@@ -169,10 +171,27 @@ impl Database {
         let mut metadatas: Vec<Map<String, Value>> = Vec::new();
         let mut idx = 0;
         for r in &results {
-            let metadata = match r.metadata.clone() {
+            let mut metadata = match r.metadata.clone() {
                 Some(map) => map,
                 None => Map::new(),
             };
+
+            if data.calculate_nearest == Some(true) {
+                let mut mid_distance: f32 = 0.0;
+                let nearests = Database::find_nearest(collection_name.clone(), embeddings_list.get(idx).unwrap().clone(), Some(100)).await;
+                match nearests {
+                    Ok (list) => {
+                        let mut len: f32 = 0.0;
+                        for n in list {
+                            mid_distance = mid_distance + n.distance;
+                            len = len + 1.0;
+                        }
+                        mid_distance = mid_distance / len;
+                    },
+                    Err(_) => {}
+                }
+                metadata["mid_distance"] = Value::from(mid_distance);
+            }
 
             ids.push(r.id.as_str());
             documents.push(&r.text.as_str());
@@ -210,10 +229,27 @@ impl Database {
         let mut metadatas: Vec<Map<String, Value>> = Vec::new();
         
         for item in data.data.clone() {
-            let metadata = match item.metadata.clone() {
+            let mut metadata = match item.metadata.clone() {
                 Some(map) => map,
                 None => Map::new(),
             };
+
+            if data.calculate_nearest == Some(true) {
+                let mut mid_distance: f32 = 0.0;
+                let nearests = Database::find_nearest(collection_name.clone(), item.embeddings.clone(), Some(100)).await;
+                match nearests {
+                    Ok (list) => {
+                        let mut len: f32 = 0.0;
+                        for n in list {
+                            mid_distance = mid_distance + n.distance;
+                            len = len + 1.0;
+                        }
+                        mid_distance = mid_distance / len;
+                    },
+                    Err(_) => {}
+                }
+                metadata["mid_distance"] = Value::from(mid_distance);
+            }
 
             result.push(item.id);
             documents_strs.push(item.text);
