@@ -170,7 +170,7 @@ impl Database {
         let mut embeddings: Vec<Vec<f32>> = Vec::new();
         let mut metadatas: Vec<Map<String, Value>> = Vec::new();
         let mut idx = 0;
-        for r in &results {
+        for r in &mut results {
             let mut metadata = match r.metadata.clone() {
                 Some(map) => map,
                 None => Map::new(),
@@ -190,8 +190,9 @@ impl Database {
                     },
                     Err(_) => {}
                 }
-                metadata["mid_distance"] = Value::from(mid_distance);
+                metadata.insert("mid_distance".to_string(), Value::from(mid_distance));
             }
+            r.metadata = Some(metadata.clone());
 
             ids.push(r.id.as_str());
             documents.push(&r.text.as_str());
@@ -248,7 +249,7 @@ impl Database {
                     },
                     Err(_) => {}
                 }
-                metadata["mid_distance"] = Value::from(mid_distance);
+                metadata.insert("mid_distance".to_string(), Value::from(mid_distance));
             }
 
             result.push(item.id);
