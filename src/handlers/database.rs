@@ -239,21 +239,7 @@ impl Database {
         HttpResponse::Ok().json(GeneralValueResult{result: result, status: true})
 	} 
 
-	pub async fn find(data: web::Json<FindDatabaseReq>) -> impl Responder {
-        let model = data.model.clone().unwrap_or(DEFAULT_EMBEDDING_MODEL.to_string());
-        
-        let embedding: Vec<f32>;
-        if data.translate_to != None && data.translate_to != Some(String::new()) {
-            let prompt = translate_prompt(data.text.clone(), data.translate_to.clone().unwrap());
-            let english = Ollama::generate(prompt, DEFAULT_PROMPT_MODEL.to_string()).await.unwrap();
-            let embeddings = Ollama::embedding(english.clone(), model.clone()).await;
-            embedding = embeddings.unwrap();
-        } else {
-            let embeddings = Ollama::embedding(data.text.clone(), model.clone()).await;
-            embedding = embeddings.unwrap();
-        }
-
-        let collection_name: String = data.collection.clone();
+    async fn find_nearest(collection_name: String, embedding: Vec<f32>, limit: Option<usize>) -> Result<Vec<FindDatabaseResult>, bool> {
         let mut chroma_options: ChromaClientOptions = Default::default();
         chroma_options.url = "http://127.0.0.1:".to_string() + Database::get_chroma_port().to_string().as_str();
 
@@ -265,7 +251,7 @@ impl Database {
             query_embeddings: Some(vec![embedding]),
             where_metadata: None,
             where_document: None,
-            n_results: if data.limit == None { Some(10) } else { data.limit },
+            n_results: if limit == None { Some(10) } else { limit },
             include: Some(vec!["documents".into(), "distances".into(), "metadatas".into()])
         };
 
@@ -289,10 +275,36 @@ impl Database {
                     idx = idx + 1;
                 }
 
-                HttpResponse::Ok().json(GeneralValueResult{result: list, status: true})
+                Ok(list)
             },
             Err(e) => {
                 println!("{}", e);
+                Err(false)
+            }
+        }
+    }
+
+	pub async fn find(data: web::Json<FindDatabaseReq>) -> impl Responder {
+        let model = data.model.clone().unwrap_or(DEFAULT_EMBEDDING_MODEL.to_string());
+        
+        let embedding: Vec<f32>;
+        if data.translate_to != None && data.translate_to != Some(String::new()) {
+            let prompt = translate_prompt(data.text.clone(), data.translate_to.clone().unwrap());
+            let english = Ollama::generate(prompt, DEFAULT_PROMPT_MODEL.to_string()).await.unwrap();
+            let embeddings = Ollama::embedding(english.clone(), model.clone()).await;
+            embedding = embeddings.unwrap();
+        } else {
+            let embeddings = Ollama::embedding(data.text.clone(), model.clone()).await;
+            embedding = embeddings.unwrap();
+        }
+
+        let collection_name: String = data.collection.clone();
+        let nearests = Database::find_nearest(collection_name, embedding, data.limit).await;
+        match nearests {
+            Ok(r) => {
+                HttpResponse::Ok().json(GeneralValueResult{result: r, status: true})
+            },
+            Err(_) => {
                 HttpResponse::InternalServerError().json(ErrorResult {status: false, message: None})
             }
         }
