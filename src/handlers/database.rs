@@ -32,7 +32,7 @@ pub struct PostDatabaseReq {
     pub model: Option<String>,
     pub collection: String,
     pub translate_to: Option<String>,
-    pub calculate_nearest: Option<bool>,
+    pub calculate_nearest: Option<usize>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -58,7 +58,7 @@ pub struct PostEmbeddingsItem {
 pub struct PostEmbeddingsReq {
     pub data: Vec<PostEmbeddingsItem>,
     pub collection: String,
-    pub calculate_nearest: Option<bool>,
+    pub calculate_nearest: Option<usize>,
 }
 
 
@@ -176,9 +176,9 @@ impl Database {
                 None => Map::new(),
             };
 
-            if data.calculate_nearest == Some(true) {
+            if data.calculate_nearest != None {
                 let mut mid_distance: f32 = 0.0;
-                let nearests = Database::find_nearest(collection_name.clone(), embeddings_list.get(idx).unwrap().clone(), Some(100)).await;
+                let nearests = Database::find_nearest(collection_name.clone(), embeddings_list.get(idx).unwrap().clone(), data.calculate_nearest).await;
                 match nearests {
                     Ok (list) => {
                         let mut len: f32 = 0.0;
@@ -234,9 +234,9 @@ impl Database {
                 None => Map::new(),
             };
 
-            if data.calculate_nearest == Some(true) {
+            if data.calculate_nearest != None {
                 let mut mid_distance: f32 = 0.0;
-                let nearests = Database::find_nearest(collection_name.clone(), item.embeddings.clone(), Some(100)).await;
+                let nearests = Database::find_nearest(collection_name.clone(), item.embeddings.clone(), data.calculate_nearest).await;
                 match nearests {
                     Ok (list) => {
                         let mut len: f32 = 0.0;
