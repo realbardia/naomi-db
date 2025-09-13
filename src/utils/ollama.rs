@@ -23,9 +23,9 @@ impl Ollama {
 
         let ollama = Ollama::default();
 
-        let input: EmbeddingsInput = EmbeddingsInput::Single(prompt);
+        let input: EmbeddingsInput = EmbeddingsInput::Single(prompt.clone());
 
-        let request = GenerateEmbeddingsRequest::new(model, input);
+        let request = GenerateEmbeddingsRequest::new(model.clone(), input);
         let res = ollama.generate_embeddings(request).await;
 
         match res {
@@ -35,7 +35,10 @@ impl Ollama {
                     None => Err(false)
                 }
             }
-            Err(_) => Err(false),
+            Err(err) => {
+                println!("prompt: {}, model: {}, err: {}", prompt, model, err);
+                Err(false)
+            },
         }
     }
 }
