@@ -10,7 +10,17 @@ use serde_json::{json, Map, Value};
 
 use qdrant_client::Qdrant;
 use qdrant_client::qdrant::{
-    UpsertPointsBuilder, CreateCollectionBuilder, Distance, PointStruct, VectorParams, VectorsConfig, QueryPointsBuilder, PointId,
+    UpsertPointsBuilder, 
+    CreateCollectionBuilder, 
+    Distance, 
+    PointStruct, 
+    VectorParams, 
+    VectorsConfig, 
+    QueryPointsBuilder, 
+    PointId, 
+    Filter,
+    Condition,
+    Range,
 };
 use uuid::Uuid;
 
@@ -66,12 +76,22 @@ pub struct PostEmbeddingsReq {
 
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct FindDatabaseFilterReq {
+    pub field: String,
+    pub value: Value,
+    pub operator: String,
+}
+
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct FindDatabaseReq {
     pub text: String,
     pub model: Option<String>,
     pub collection: String,
     pub translate_to: Option<String>,
+    pub filters: Option<Vec<FindDatabaseFilterReq>>,
     pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -200,7 +220,7 @@ impl Database {
 
             if data.calculate_nearest != None {
                 let mut mid_distance: f32 = 0.0;
-                let nearests = Database::find_nearest(collection_name.clone(), embeddings_list.get(idx).unwrap().clone(), data.calculate_nearest).await;
+                let nearests = Database::find_nearest(collection_name.clone(), embeddings_list.get(idx).unwrap().clone(), data.calculate_nearest, None, None).await;
                 match nearests {
                     Ok (list) => {
                         let mut len: f32 = 0.0;
@@ -272,7 +292,7 @@ impl Database {
 
             if data.calculate_nearest != None {
                 let mut mid_distance: f32 = 0.0;
-                let nearests = Database::find_nearest(collection_name.clone(), item.embeddings.clone(), data.calculate_nearest).await;
+                let nearests = Database::find_nearest(collection_name.clone(), item.embeddings.clone(), data.calculate_nearest, None, None).await;
                 match nearests {
                     Ok (list) => {
                         let mut len: f32 = 0.0;
@@ -328,12 +348,81 @@ impl Database {
         HttpResponse::Ok().json(GeneralValueResult{result: result, status: true})
 	} 
 
-    async fn find_nearest(collection_name: String, embedding: Vec<f32>, limit: Option<usize>) -> Result<Vec<FindDatabaseResult>, bool> {
+    async fn find_nearest(collection_name: String, embedding: Vec<f32>, limit: Option<usize>, offset: Option<usize>, filters: Option<Vec<FindDatabaseFilterReq>>) -> Result<Vec<FindDatabaseResult>, bool> {
         let client = Database::create_client(collection_name.clone()).await;
+        let mut filter_conditions: Vec<Condition> = Vec::new();
+
+        match filters {
+            Some(list) => {
+                for l in list {
+                    match l.operator.as_str() {
+                        ">" => {
+                            filter_conditions.push(Condition::range(
+                                l.field,
+                                Range {
+                                    gt: Some(l.value.as_f64().unwrap()),
+                                    ..Default::default()
+                                },
+                            ));
+                        },
+                        ">=" => {
+                            filter_conditions.push(Condition::range(
+                                l.field,
+                                Range {
+                                    gte: Some(l.value.as_f64().unwrap()),
+                                    ..Default::default()
+                                },
+                            ));
+                        },
+                        "<" => {
+                            filter_conditions.push(Condition::range(
+                                l.field,
+                                Range {
+                                    lt: Some(l.value.as_f64().unwrap()),
+                                    ..Default::default()
+                                },
+                            ));
+                        },
+                        "<=" => {
+                            filter_conditions.push(Condition::range(
+                                l.field,
+                                Range {
+                                    lte: Some(l.value.as_f64().unwrap()),
+                                    ..Default::default()
+                                },
+                            ));
+                        },
+                        "=" => {
+                            match l.value.as_i64() {
+                                Some(v) => {
+                                    filter_conditions.push(Condition::matches(
+                                        l.field,
+                                        v,
+                                    ));
+                                },
+                                None => {
+                                    filter_conditions.push(Condition::matches_text(
+                                        l.field,
+                                        l.value.as_str().unwrap(),
+                                    ));
+                                }
+                            }
+                        },
+                        _ => {
+                        }
+                    }
+                }
+            },
+            None => {}
+        }
+
+        let filter = Filter::must(filter_conditions);
 
         let search_request = QueryPointsBuilder::new(collection_name)
             .query(embedding)
+            .filter(filter)
             .limit(limit.unwrap_or(10) as u64)
+            .offset(offset.unwrap_or(0) as u64)
             .with_payload(true)
             .with_vectors(true);
 
@@ -353,7 +442,6 @@ impl Database {
 
                 let metadata = payload;
 
-                // تبدیل PointId به String
                 let id_str = match scored_point.id.unwrap() {
                     PointId { point_id_options: Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) } => n.to_string(),
                     PointId { point_id_options: Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(s)) } => s,
@@ -397,7 +485,7 @@ impl Database {
         }
 
         let collection_name: String = data.collection.clone();
-        let nearests = Database::find_nearest(collection_name, embedding, data.limit).await;
+        let nearests = Database::find_nearest(collection_name, embedding, data.limit, data.offset, data.filters.clone()).await;
         match nearests {
             Ok(r) => {
                 HttpResponse::Ok().json(GeneralValueResult{result: r, status: true})
