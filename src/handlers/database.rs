@@ -85,7 +85,7 @@ pub struct FindDatabaseFilterReq {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FindDatabaseReq {
-    pub text: String,
+    pub text: Option<String>,
     pub model: Option<String>,
     pub collection: String,
     pub translate_to: Option<String>,
@@ -220,7 +220,7 @@ impl Database {
 
             if data.calculate_nearest != None {
                 let mut mid_distance: f32 = 0.0;
-                let nearests = Database::find_nearest(collection_name.clone(), embeddings_list.get(idx).unwrap().clone(), data.calculate_nearest, None, None).await;
+                let nearests = Database::find_nearest(collection_name.clone(), Some(embeddings_list.get(idx).unwrap().clone()), data.calculate_nearest, None, None).await;
                 match nearests {
                     Ok (list) => {
                         let mut len: f32 = 0.0;
@@ -292,7 +292,7 @@ impl Database {
 
             if data.calculate_nearest != None {
                 let mut mid_distance: f32 = 0.0;
-                let nearests = Database::find_nearest(collection_name.clone(), item.embeddings.clone(), data.calculate_nearest, None, None).await;
+                let nearests = Database::find_nearest(collection_name.clone(), Some(item.embeddings.clone()), data.calculate_nearest, None, None).await;
                 match nearests {
                     Ok (list) => {
                         let mut len: f32 = 0.0;
@@ -348,7 +348,7 @@ impl Database {
         HttpResponse::Ok().json(GeneralValueResult{result: result, status: true})
 	} 
 
-    async fn find_nearest(collection_name: String, embedding: Vec<f32>, limit: Option<usize>, offset: Option<usize>, filters: Option<Vec<FindDatabaseFilterReq>>) -> Result<Vec<FindDatabaseResult>, bool> {
+    async fn find_nearest(collection_name: String, embedding: Option<Vec<f32>>, limit: Option<usize>, offset: Option<usize>, filters: Option<Vec<FindDatabaseFilterReq>>) -> Result<Vec<FindDatabaseResult>, bool> {
         let client = Database::create_client(collection_name.clone()).await;
         let mut filter_conditions: Vec<Condition> = Vec::new();
 
@@ -418,9 +418,15 @@ impl Database {
 
         let filter = Filter::must(filter_conditions);
 
-        let search_request = QueryPointsBuilder::new(collection_name)
-            .query(embedding)
-            .filter(filter)
+        let mut search_request = QueryPointsBuilder::new(collection_name);
+        match embedding {
+            Some(embd) => {
+                search_request = search_request.query(embd);
+            },
+            None => {},
+        };
+
+        search_request = search_request.filter(filter)
             .limit(limit.unwrap_or(10) as u64)
             .offset(offset.unwrap_or(0) as u64)
             .with_payload(true)
@@ -473,16 +479,20 @@ impl Database {
 	pub async fn find(data: web::Json<FindDatabaseReq>) -> impl Responder {
         let model = data.model.clone().unwrap_or(DEFAULT_EMBEDDING_MODEL.to_string());
         
-        let embedding: Vec<f32>;
-        if data.translate_to != None && data.translate_to != Some(String::new()) {
-            let prompt = translate_prompt(data.text.clone(), data.translate_to.clone().unwrap());
-            let english = Ollama::generate(prompt, DEFAULT_PROMPT_MODEL.to_string()).await.unwrap();
-            let embeddings = Ollama::embedding(english.clone(), model.clone()).await;
-            embedding = embeddings.unwrap();
-        } else {
-            let embeddings = Ollama::embedding(data.text.clone(), model.clone()).await;
-            embedding = embeddings.unwrap();
-        }
+        let embedding: Option<Vec<f32>> = match &data.text {
+            Some(text) => {
+                if data.translate_to != None && data.translate_to != Some(String::new()) {
+                    let prompt = translate_prompt(text.clone(), data.translate_to.clone().unwrap());
+                    let english = Ollama::generate(prompt, DEFAULT_PROMPT_MODEL.to_string()).await.unwrap();
+                    let embeddings = Ollama::embedding(english.clone(), model.clone()).await;
+                    Some(embeddings.unwrap())
+                } else {
+                    let embeddings = Ollama::embedding(text.clone(), model.clone()).await;
+                    Some(embeddings.unwrap())
+                }
+            },
+            None => None,
+        };
 
         let collection_name: String = data.collection.clone();
         let nearests = Database::find_nearest(collection_name, embedding, data.limit, data.offset, data.filters.clone()).await;
