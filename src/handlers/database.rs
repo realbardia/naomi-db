@@ -90,6 +90,7 @@ pub struct FindDatabaseReq {
     pub collection: String,
     pub translate_to: Option<String>,
     pub filters: Option<Vec<FindDatabaseFilterReq>>,
+    pub filter_by_ids: Option<Vec<String>>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 }
@@ -220,7 +221,7 @@ impl Database {
 
             if data.calculate_nearest != None {
                 let mut mid_distance: f32 = 0.0;
-                let nearests = Database::find_nearest(collection_name.clone(), Some(embeddings_list.get(idx).unwrap().clone()), data.calculate_nearest, None, None).await;
+                let nearests = Database::find_nearest(collection_name.clone(), Some(embeddings_list.get(idx).unwrap().clone()), data.calculate_nearest, None, None, None).await;
                 match nearests {
                     Ok (list) => {
                         let mut len: f32 = 0.0;
@@ -292,7 +293,7 @@ impl Database {
 
             if data.calculate_nearest != None {
                 let mut mid_distance: f32 = 0.0;
-                let nearests = Database::find_nearest(collection_name.clone(), Some(item.embeddings.clone()), data.calculate_nearest, None, None).await;
+                let nearests = Database::find_nearest(collection_name.clone(), Some(item.embeddings.clone()), data.calculate_nearest, None, None, None).await;
                 match nearests {
                     Ok (list) => {
                         let mut len: f32 = 0.0;
@@ -348,7 +349,7 @@ impl Database {
         HttpResponse::Ok().json(GeneralValueResult{result: result, status: true})
 	} 
 
-    async fn find_nearest(collection_name: String, embedding: Option<Vec<f32>>, limit: Option<usize>, offset: Option<usize>, filters: Option<Vec<FindDatabaseFilterReq>>) -> Result<Vec<FindDatabaseResult>, bool> {
+    async fn find_nearest(collection_name: String, embedding: Option<Vec<f32>>, limit: Option<usize>, offset: Option<usize>, filters: Option<Vec<FindDatabaseFilterReq>>, filter_by_ids: Option<Vec<String>>) -> Result<Vec<FindDatabaseResult>, bool> {
         let client = Database::create_client(collection_name.clone()).await;
         let mut filter_conditions: Vec<Condition> = Vec::new();
 
@@ -415,6 +416,13 @@ impl Database {
             },
             None => {}
         }
+        
+        if let Some(ids) = filter_by_ids {
+        if !ids.is_empty() {
+            let point_ids: Vec<PointId> = ids.into_iter().map(PointId::from).collect();
+            filter_conditions.push(Condition::has_id(point_ids));
+        }
+    }
 
         let filter = Filter::must(filter_conditions);
 
@@ -439,33 +447,33 @@ impl Database {
                 let mut list: Vec<FindDatabaseResult> = Vec::new();
 
                 for scored_point in response.result {
-                let mut payload = scored_point.payload;
+                    let mut payload = scored_point.payload;
 
-                let text = payload
-                    .remove("original_document")
-                    .and_then(|v| Some(v.to_string()))
-                    .unwrap_or_else(|| "".to_string());
+                    let text = payload
+                        .remove("original_document")
+                        .and_then(|v| Some(v.to_string()))
+                        .unwrap_or_else(|| "".to_string());
 
-                let metadata = payload;
+                    let metadata = payload;
 
-                let id_str = match scored_point.id.unwrap() {
-                    PointId { point_id_options: Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) } => n.to_string(),
-                    PointId { point_id_options: Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(s)) } => s,
-                    _ => "".to_string(),
-                };
+                    let id_str = match scored_point.id.unwrap() {
+                        PointId { point_id_options: Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) } => n.to_string(),
+                        PointId { point_id_options: Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(s)) } => s,
+                        _ => "".to_string(),
+                    };
 
-                list.push(FindDatabaseResult {
-                    id: id_str,
-                    metadata: Some(metadata.into_iter()
-                        .map(|(k, v)| {
-                            let serialized_value = serde_json::to_value(v).expect("Failed to serialize value");
-                            (k, serialized_value)
-                        })
-                        .collect()),
-                    text: text,
-                    distance: 1.0 - scored_point.score,
-                });
-            }
+                    list.push(FindDatabaseResult {
+                        id: id_str,
+                        metadata: Some(metadata.into_iter()
+                            .map(|(k, v)| {
+                                let serialized_value = serde_json::to_value(v).expect("Failed to serialize value");
+                                (k, serialized_value)
+                            })
+                            .collect()),
+                        text: text,
+                        distance: 1.0 - scored_point.score,
+                    });
+                }
 
                 Ok(list)
             },
@@ -495,7 +503,7 @@ impl Database {
         };
 
         let collection_name: String = data.collection.clone();
-        let nearests = Database::find_nearest(collection_name, embedding, data.limit, data.offset, data.filters.clone()).await;
+        let nearests = Database::find_nearest(collection_name, embedding, data.limit, data.offset, data.filters.clone(), data.filter_by_ids.clone()).await;
         match nearests {
             Ok(r) => {
                 HttpResponse::Ok().json(GeneralValueResult{result: r, status: true})
