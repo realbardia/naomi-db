@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use crate::models::general::*;
 use crate::models::database::*;
@@ -17,10 +19,12 @@ use qdrant_client::qdrant::{
     VectorParams, 
     VectorsConfig, 
     QueryPointsBuilder, 
+    QueryBatchPointsBuilder,
     PointId, 
     Filter,
     Condition,
     Range,
+    ScoredPoint,
 };
 use uuid::Uuid;
 
@@ -85,7 +89,7 @@ pub struct FindDatabaseFilterReq {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FindDatabaseReq {
-    pub text: Option<String>,
+    pub texts: Option<Vec<String>>,
     pub model: Option<String>,
     pub collection: String,
     pub translate_to: Option<String>,
@@ -221,7 +225,11 @@ impl Database {
 
             if data.calculate_nearest != None {
                 let mut mid_distance: f32 = 0.0;
-                let nearests = Database::find_nearest(collection_name.clone(), Some(embeddings_list.get(idx).unwrap().clone()), data.calculate_nearest, None, None, None).await;
+
+                let mut input_embeddings: Vec<Vec<f32>> = Vec::new();
+                input_embeddings.push(embeddings_list.get(idx).unwrap().clone());
+
+                let nearests = Database::find_nearest(collection_name.clone(), Some(input_embeddings), data.calculate_nearest, None, None, None).await;
                 match nearests {
                     Ok (list) => {
                         let mut len: f32 = 0.0;
@@ -293,7 +301,11 @@ impl Database {
 
             if data.calculate_nearest != None {
                 let mut mid_distance: f32 = 0.0;
-                let nearests = Database::find_nearest(collection_name.clone(), Some(item.embeddings.clone()), data.calculate_nearest, None, None, None).await;
+
+                let mut input_embeddings: Vec<Vec<f32>> = Vec::new();
+                input_embeddings.push(item.embeddings.clone());
+
+                let nearests = Database::find_nearest(collection_name.clone(), Some(input_embeddings), data.calculate_nearest, None, None, None).await;
                 match nearests {
                     Ok (list) => {
                         let mut len: f32 = 0.0;
@@ -349,7 +361,7 @@ impl Database {
         HttpResponse::Ok().json(GeneralValueResult{result: result, status: true})
 	} 
 
-    async fn find_nearest(collection_name: String, embedding: Option<Vec<f32>>, limit: Option<usize>, offset: Option<usize>, filters: Option<Vec<FindDatabaseFilterReq>>, filter_by_ids: Option<Vec<String>>) -> Result<Vec<FindDatabaseResult>, bool> {
+    async fn find_nearest(collection_name: String, embeddings: Option<Vec<Vec<f32>>>, limit: Option<usize>, offset: Option<usize>, filters: Option<Vec<FindDatabaseFilterReq>>, filter_by_ids: Option<Vec<String>>) -> Result<Vec<FindDatabaseResult>, bool> {
         let client = Database::create_client(collection_name.clone()).await;
         let mut filter_conditions: Vec<Condition> = Vec::new();
 
@@ -418,35 +430,85 @@ impl Database {
         }
         
         if let Some(ids) = filter_by_ids {
-        if !ids.is_empty() {
-            let point_ids: Vec<PointId> = ids.into_iter().map(PointId::from).collect();
-            filter_conditions.push(Condition::has_id(point_ids));
+            if !ids.is_empty() {
+                let point_ids: Vec<PointId> = ids.into_iter().map(PointId::from).collect();
+                filter_conditions.push(Condition::has_id(point_ids));
+            }
         }
-    }
 
         let filter = Filter::must(filter_conditions);
 
-        let mut search_request = QueryPointsBuilder::new(collection_name);
-        match embedding {
-            Some(embd) => {
-                search_request = search_request.query(embd);
+        let limit_val = limit.unwrap_or(10) as u64;
+        let offset_val = offset.unwrap_or(0) as u64;
+
+        let queries = match embeddings {
+            Some(vecs) if !vecs.is_empty() => {
+                vecs.into_iter().map(|vec| {
+                    QueryPointsBuilder::new(&collection_name)
+                        .query(vec)
+                        .filter(filter.clone())
+                        .limit(limit_val)
+                        .offset(offset_val)
+                        .with_payload(true)
+                        .with_vectors(true)
+                        .build()
+                }).collect()
             },
-            None => {},
+            _ => {
+                vec![
+                    QueryPointsBuilder::new(&collection_name)
+                        .filter(filter)
+                        .limit(limit_val)
+                        .offset(offset_val)
+                        .with_payload(true)
+                        .with_vectors(true)
+                        .build()
+                ]
+            }
         };
 
-        search_request = search_request.filter(filter)
-            .limit(limit.unwrap_or(10) as u64)
-            .offset(offset.unwrap_or(0) as u64)
-            .with_payload(true)
-            .with_vectors(true);
+        let batch_request = QueryBatchPointsBuilder::new(collection_name, queries);
 
-        let search_result = client.query(search_request).await;
-
+        let search_result = client.query_batch(batch_request).await;
         match search_result {
             Ok(response) => {
+                let mut merged_results: HashMap<String, ScoredPoint> = HashMap::new();
+
+                for batch in response.result {
+                    for point in batch.result {
+                        let id_key = match &point.id {
+                            Some(PointId { point_id_options: Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(n)) }) => n.to_string(),
+                            Some(PointId { point_id_options: Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(s)) }) => s.clone(),
+                            _ => continue,
+                        };
+
+                        merged_results
+                            .entry(id_key)
+                            .and_modify(|existing| {
+                                if point.score > existing.score {
+                                    *existing = point.clone();
+                                }
+                            })
+                            .or_insert(point);
+                    }
+                }
+
+                let mut all_points: Vec<ScoredPoint> = merged_results.into_values().collect();
+                all_points.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+                let start = offset_val as usize;
+                let req_limit = limit_val as usize;
+                
+                let final_points = if start >= all_points.len() {
+                    Vec::new()
+                } else {
+                    let end = std::cmp::min(start + req_limit, all_points.len());
+                    all_points[start..end].to_vec()
+                };
+
                 let mut list: Vec<FindDatabaseResult> = Vec::new();
 
-                for scored_point in response.result {
+                for scored_point in final_points {
                     let mut payload = scored_point.payload;
 
                     let text = payload
@@ -478,32 +540,77 @@ impl Database {
                 Ok(list)
             },
             Err(e) => {
-                println!("{}", e);
+                println!("Qdrant Error: {}", e);
                 Err(false)
             }
         }
     }
 
-	pub async fn find(data: web::Json<FindDatabaseReq>) -> impl Responder {
+	pub async fn find(data: web::Json<FindDatabaseReq>, redis_client: web::Data<redis::Client>) -> impl Responder {
+        use futures::future::join_all;
+        use redis::AsyncCommands;
+        use md5;
+
         let model = data.model.clone().unwrap_or(DEFAULT_EMBEDDING_MODEL.to_string());
-        
-        let embedding: Option<Vec<f32>> = match &data.text {
-            Some(text) => {
-                if data.translate_to != None && data.translate_to != Some(String::new()) {
-                    let prompt = translate_prompt(text.clone(), data.translate_to.clone().unwrap());
-                    let english = Ollama::generate(prompt, DEFAULT_PROMPT_MODEL.to_string()).await.unwrap();
-                    let embeddings = Ollama::embedding(english.clone(), model.clone()).await;
-                    Some(embeddings.unwrap())
-                } else {
-                    let embeddings = Ollama::embedding(text.clone(), model.clone()).await;
-                    Some(embeddings.unwrap())
-                }
+        let multiplexed_con = match redis_client.get_multiplexed_async_connection().await {
+            Ok(con) => Some(con),
+            Err(e) => {
+                println!("Redis connection error: {}", e);
+                None
+            }
+        };
+
+        let embeddings: Option<Vec<Vec<f32>>> = match &data.texts {
+            Some(texts) => {
+                let tasks = texts.iter().map(|text| {
+                    let text = text.clone();
+                    let model = model.clone();
+                    let translate_to = data.translate_to.clone();
+
+                    let mut task_con = multiplexed_con.clone(); 
+
+                    async move {
+                        let key_str = format!("{}:{}", model, text);
+                        let key_hash = format!("{:x}", md5::compute(key_str));
+                        let redis_key = format!("emb:{}", key_hash);
+
+                        if let Some(mut connection) = task_con.clone() {
+                            let cached: redis::RedisResult<String> = connection.get(&redis_key).await;
+                            if let Ok(json_str) = cached {
+                                if let Ok(vec_data) = serde_json::from_str::<Vec<f32>>(&json_str) {
+                                    return vec_data;
+                                }
+                            }
+                        }
+                        
+                        let text_to_embed = if translate_to.is_some() && translate_to != Some(String::new()) {
+                            let prompt = translate_prompt(text.clone(), translate_to.unwrap());
+                            Ollama::generate(prompt, DEFAULT_PROMPT_MODEL.to_string()).await.unwrap_or(text)
+                        } else {
+                            text
+                        };
+
+                        let embedding = Ollama::embedding(text_to_embed, model).await.unwrap();
+                        
+                        if !embedding.is_empty() {
+                            if let Some(con) = &mut task_con {
+                                if let Ok(json_str) = serde_json::to_string(&embedding) {
+                                    let _: redis::RedisResult<()> = con.set_ex(&redis_key, json_str, 86400).await;
+                                }
+                            }
+                        }
+
+                        embedding
+                    }
+                });
+
+                Some(join_all(tasks).await)
             },
             None => None,
         };
 
         let collection_name: String = data.collection.clone();
-        let nearests = Database::find_nearest(collection_name, embedding, data.limit, data.offset, data.filters.clone(), data.filter_by_ids.clone()).await;
+        let nearests = Database::find_nearest(collection_name, embeddings, data.limit, data.offset, data.filters.clone(), data.filter_by_ids.clone()).await;
         match nearests {
             Ok(r) => {
                 HttpResponse::Ok().json(GeneralValueResult{result: r, status: true})

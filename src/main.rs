@@ -13,6 +13,8 @@ mod models;
 mod handlers;
 mod utils;
 
+use redis::Client;
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv().ok();
@@ -39,10 +41,13 @@ async fn main() -> std::io::Result<()> {
         thread::sleep(std::time::Duration::from_secs(1));
     });
 
-    HttpServer::new(|| {
+    let redis_client = Client::open("redis://127.0.0.1:6379").expect("Failed to create Redis client");
+
+    HttpServer::new(move || {
         #[allow(deprecated)]
         App::new()
             .wrap(Cors::permissive())
+            .app_data(web::Data::new(redis_client.clone()))
             
             .route("/api/v1/health", web::get().to(health::Health::check))
 
