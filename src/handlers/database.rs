@@ -119,7 +119,7 @@ impl Database {
 
     pub fn get_qdrant_port() -> i32 {
         use std::env;
-        env::var("QDRANT_PORT").unwrap_or("6334".to_string()).parse().unwrap()
+        env::var("QDRANT__SERVICE__GRPC_PORT").unwrap_or("6188".to_string()).parse().unwrap()
     }
 
     async fn create_client(collection_name: String) -> Qdrant {
